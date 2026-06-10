@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Idea Field</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #F0EEE9;
+      font-family: system-ui, sans-serif;
+    }
+
+    /* ── WebGL canvas sits behind everything ── */
+    #bg-canvas {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      z-index: 0;
+    }
+
+    /* ── Bubble canvas sits on top of bg ── */
+    #bubble-canvas {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      z-index: 1;
+      pointer-events: auto;
+      cursor: default;
+    }
+
+    /* ── Sparkle canvas sits on top of everything ── */
+    #sparkle-canvas {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      z-index: 5;
+      pointer-events: none;
+    }
+
+    /* ── UI overlay ── */
+    #ui {
+      position: fixed;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    #task-input {
+      background: rgba(255,255,255,0.55);
+      border: 1px solid rgba(0,0,0,0.15);
+      border-radius: 999px;
+      color: #2a2520;
+      font-size: 14px;
+      padding: 10px 20px;
+      width: 280px;
+      outline: none;
+      backdrop-filter: blur(12px);
+      transition: border-color 0.2s;
+    }
+    #task-input::placeholder { color: rgba(0,0,0,0.3); }
+    #task-input:focus { border-color: rgba(0,0,0,0.3); }
+
+    #add-btn {
+      background: rgba(255,255,255,0.55);
+      border: 1px solid rgba(0,0,0,0.15);
+      border-radius: 999px;
+      color: #2a2520;
+      font-size: 13px;
+      padding: 10px 20px;
+      cursor: pointer;
+      backdrop-filter: blur(12px);
+      transition: background 0.2s;
+    }
+    #add-btn:hover { background: rgba(255,255,255,0.8); }
+
+    #asana-status {
+      position: fixed;
+      top: 1.5rem;
+      right: 1.5rem;
+      z-index: 10;
+      font-size: 11px;
+      color: rgba(0,0,0,0.25);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    #bubble-count {
+      position: fixed;
+      top: 1.5rem;
+      left: 1.5rem;
+      z-index: 10;
+      font-size: 11px;
+      color: rgba(0,0,0,0.2);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    #iri-picker {
+      position: fixed;
+      top: 1.5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(240,238,233,0.7);
+      backdrop-filter: blur(10px);
+      border: 0.5px solid rgba(0,0,0,0.1);
+      border-radius: 999px;
+      padding: 5px 10px 5px 14px;
+    }
+
+    .iri-label {
+      font-size: 10px;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: rgba(0,0,0,0.3);
+      margin-right: 2px;
+    }
+
+    .iri-btn {
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      border: 0.5px solid rgba(0,0,0,0.12);
+      background: rgba(255,255,255,0.5);
+      color: rgba(0,0,0,0.4);
+      font-size: 11px;
+      font-family: system-ui, sans-serif;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .iri-btn:hover { background: rgba(255,255,255,0.9); color: rgba(0,0,0,0.7); }
+    .iri-btn.active {
+      background: rgba(0,0,0,0.08);
+      color: rgba(0,0,0,0.75);
+      border-color: rgba(0,0,0,0.2);
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body>
+
+  <canvas id="bg-canvas"></canvas>
+  <canvas id="bubble-canvas"></canvas>
+  <canvas id="sparkle-canvas"></canvas>
+
+  <div id="bubble-count">0 ideas</div>
+  <div id="asana-status">● Asana: offline</div>
+
+  <div id="iri-picker">
+    <span class="iri-label">iridescence</span>
+    <button class="iri-btn active" data-base="0.058" data-range="0.045">A</button>
+    <button class="iri-btn" data-base="0.046" data-range="0.036">B</button>
+    <button class="iri-btn" data-base="0.037" data-range="0.029">C</button>
+  </div>
+
+  <div id="ui">
+    <input id="task-input" type="text" placeholder="what's in your head..." maxlength="60" />
+    <button id="add-btn">spawn</button>
+  </div>
+
+  <!-- Three.js for background shader -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <!-- Matter.js for physics -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+
+  <script>
+  // ═══════════════════════════════════════════════════════
+  //  BACKGROUND — iridescent void shader (Three.js)
+  // ═══════════════════════════════════════════════════════
+
+  const bgCanvas = document.getElementById('bg-canvas');
+  const renderer = new THREE.WebGLRenderer({ canvas: bgCanvas, antialias: false });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+
+  const bgScene = new THREE.Scene();
+  const bgCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+  // ── Background fragment shader ──
+  // Thin-film iridescence + slow drift. This is the void.
+  const BG_VERT = `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = vec4(position, 1.0);
+    }
+  `;
+
+  const BG_FRAG = `
+    uniform float uTime;
+    uniform vec2  uResolution;
+    uniform float uIriBase;
+    uniform float uIriRange;
+    varying vec2  vUv;
+
+    // Smooth noise helpers
+    vec3 hash3(vec2 p) {
+      vec3 q = vec3(
+        dot(p, vec2(127.1, 311.7)),
+        dot(p, vec2(269.5, 183.3)),
+        dot(p, vec2(419.2, 371.9))
+      );
+      return fract(sin(q) * 43758.5453);
+    }
+
+    float noise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      vec2 u = f * f * (3.0 - 2.0 * f);
+      return mix(
+        mix(dot(hash3(i + vec2(0,0)).xy, f - vec2(0,0)),
+            dot(hash3(i + vec2(1,0)).xy, f - vec2(1,0)), u.x),
+        mix(dot(hash3(i + vec2(0,1)).xy, f - vec2(0,1)),
+            dot(hash3(i + vec2(1,1)).xy, f - vec2(1,1)), u.x),
+        u.y
+      );
+    }
+
+    // Thin-film iridescence: hue rotates with angle + depth
+    vec3 iridescence(float t, float shift) {
+      float r = 0.5 + 0.5 * sin(t * 6.28318 + shift + 0.0);
+      float g = 0.5 + 0.5 * sin(t * 6.28318 + shift + 2.094);
+      float b = 0.5 + 0.5 * sin(t * 6.28318 + shift + 4.189);
+      return vec3(r, g, b);
+    }
+
+    void main() {
+      vec2 uv = vUv;
+      float t = uTime * 0.08;
+
+      // Layered slow noise fields — the drifting void
+      float n1 = noise(uv * 2.5 + vec2(t * 0.3, t * 0.15));
+      float n2 = noise(uv * 5.0 - vec2(t * 0.2, t * 0.25));
+      float n3 = noise(uv * 1.2 + vec2(t * 0.1, -t * 0.18));
+
+      float composite = n1 * 0.5 + n2 * 0.3 + n3 * 0.2;
+
+      // Iridescent color shift
+      vec3 iri = iridescence(composite, t * 0.4);
+
+      // Cream white base — iridescence as a soft wash, not the full color
+      vec3 cream = vec3(0.941, 0.933, 0.914);
+      vec3 col = mix(cream, iri, uIriBase + composite * uIriRange);
+
+      // Subtle edge warm-down
+      float vignette = 1.0 - smoothstep(0.4, 1.4, length(uv - 0.5) * 2.0);
+      col = mix(col * 0.96, col, vignette);
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `;
+
+  const bgMaterial = new THREE.ShaderMaterial({
+    vertexShader:   BG_VERT,
+    fragmentShader: BG_FRAG,
+    uniforms: {
+      uTime:       { value: 0 },
+      uResolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
+      uIriBase:    { value: 0.058 },   // default: current level
+      uIriRange:   { value: 0.045 }
+    }
+  });
+
+  const bgMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), bgMaterial);
+  bgScene.add(bgMesh);
+
+
+  // ═══════════════════════════════════════════════════════
+  //  PHYSICS — Matter.js world
+  // ═══════════════════════════════════════════════════════
+
+  const { Engine, Render: MRender, Runner, Bodies, Body, Events, Composite, World } = Matter;
+
+  const engine = Engine.create({ gravity: { x: 0, y: 0 } });
+  const physWorld = engine.world;
+  const runner = Runner.create();
+  Runner.run(runner, engine);
+
+  // Invisible boundary walls
+  function createWalls(w, h) {
+    const thick = 60;
+    return [
+      Bodies.rectangle(w/2, -thick/2,     w+thick, thick, { isStatic: true, label: 'wall' }),
+      Bodies.rectangle(w/2, h+thick/2,    w+thick, thick, { isStatic: true, label: 'wall' }),
+      Bodies.rectangle(-thick/2, h/2,     thick, h+thick, { isStatic: true, label: 'wall' }),
+      Bodies.rectangle(w+thick/2, h/2,    thick, h+thick, { isStatic: true, label: 'wall' }),
+    ];
+  }
+
+  let walls = createWalls(window.innerWidth, window.innerHeight);
+  World.add(physWorld, walls);
+
+  // Soft center-pull: applied each frame to keep bubbles on screen
+  function applyCenterGravity() {
+    const cx = window.innerWidth  / 2;
+    const cy = window.innerHeight / 2;
+    const strength = 0.00012;
+    Composite.allBodies(physWorld).forEach(body => {
+      if (body.isStatic) return;
+      const dx = cx - body.position.x;
+      const dy = cy - body.position.y;
+      Body.applyForce(body, body.position, {
+        x: dx * strength * body.mass,
+        y: dy * strength * body.mass
+      });
+    });
+  }
+
+
+  // ═══════════════════════════════════════════════════════
+  //  BUBBLES — each is a physics body + shader-drawn circle
+  // ═══════════════════════════════════════════════════════
+
+  const bubbles = [];   // { body, label, radius, seed, color, birthTime }
+
+  // Palette of iridescent base hues (HSL, shifted at runtime)
+  const HUES = [210, 260, 180, 300, 160, 240, 320, 190];
+
+  function spawnBubble(label) {
+    const minR = 48, maxR = 100;
+    const r = minR + Math.random() * (maxR - minR);
+
+    // Start near center with slight random offset
+    const cx = window.innerWidth  / 2 + (Math.random() - 0.5) * 200;
+    const cy = window.innerHeight / 2 + (Math.random() - 0.5) * 200;
+
+    const body = Bodies.circle(cx, cy, r, {
+      restitution: 0.55,
+      friction: 0.01,
+      frictionAir: 0.018,
+      density: 0.002,
+      label: 'bubble'
+    });
+
+    // Gentle random initial velocity
+    Body.setVelocity(body, {
+      x: (Math.random() - 0.5) * 3,
+      y: (Math.random() - 0.5) * 3
+    });
+
+    World.add(physWorld, body);
+
+    const bubble = {
+      body,
+      label,
+      radius: r,
+      seed: Math.random() * 1000,
+      hue: HUES[Math.floor(Math.random() * HUES.length)],
+      birthTime: performance.now()
+    };
+
+    bubbles.push(bubble);
+    updateCount();
+    return bubble;
+  }
+
+  function updateCount() {
+    document.getElementById('bubble-count').textContent =
+      bubbles.length + (bubbles.length === 1 ? ' idea' : ' ideas');
+  }
+
+
+  // ═══════════════════════════════════════════════════════
+  //  BUBBLE CANVAS — 2D canvas draws the wobbly bubbles
+  //  (WebGL shader per-bubble would be next step;
+  //   this uses canvas 2D with math-driven wobble as scaffold)
+  // ═══════════════════════════════════════════════════════
+
+  const bCanvas = document.getElementById('bubble-canvas');
+  const bCtx    = bCanvas.getContext('2d');
+  bCanvas.width  = window.innerWidth;
+  bCanvas.height = window.innerHeight;
+
+  function drawBubble(ctx, bubble, now) {
+    const { body, radius, seed, hue, birthTime, label } = bubble;
+    const { x, y } = body.position;
+
+    // Birth scale-in
+    const age = (now - birthTime) / 600;
+    const scale = Math.min(1, age < 1 ? (1 - Math.pow(1 - age, 3)) : 1);
+
+    const r = radius * scale;
+    if (r < 2) return;
+
+    const t = now * 0.001;
+
+    // ── Wobbly border: displace radius at each angle with layered sin ──
+    const POINTS = 64;
+    const wobbleAmp  = r * 0.045;
+    const wobbleFreq = 5 + Math.floor(seed % 4);
+
+    ctx.save();
+    ctx.translate(x, y);
+
+    ctx.beginPath();
+    for (let i = 0; i <= POINTS; i++) {
+      const angle = (i / POINTS) * Math.PI * 2;
+      // Two overlapping wobble waves — unique per bubble via seed
+      const wobble =
+        wobbleAmp * Math.sin(angle * wobbleFreq + t * 1.2 + seed) +
+        wobbleAmp * 0.5 * Math.sin(angle * (wobbleFreq + 2) - t * 0.8 + seed * 0.7);
+      const rr = r + wobble;
+      const px = Math.cos(angle) * rr;
+      const py = Math.sin(angle) * rr;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+
+    // ── Iridescent fill: radial gradient with hue-shifted stops ──
+    const hShift = (t * 25 + seed * 40) % 360;
+    const grad = ctx.createRadialGradient(-r * 0.3, -r * 0.3, 0, 0, 0, r * 1.1);
+    grad.addColorStop(0.0, `hsla(${(hue + hShift)       % 360}, 80%, 90%, 0.25)`);
+    grad.addColorStop(0.3, `hsla(${(hue + hShift + 40)  % 360}, 75%, 75%, 0.18)`);
+    grad.addColorStop(0.7, `hsla(${(hue + hShift + 100) % 360}, 90%, 65%, 0.12)`);
+    grad.addColorStop(1.0, `hsla(${(hue + hShift + 180) % 360}, 70%, 50%, 0.05)`);
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // ── Iridescent rim ──
+    const rimGrad = ctx.createLinearGradient(-r, -r, r, r);
+    rimGrad.addColorStop(0,   `hsla(${(hue + hShift)       % 360}, 100%, 85%, 0.7)`);
+    rimGrad.addColorStop(0.5, `hsla(${(hue + hShift + 120) % 360}, 100%, 75%, 0.5)`);
+    rimGrad.addColorStop(1,   `hsla(${(hue + hShift + 240) % 360}, 100%, 85%, 0.7)`);
+    ctx.strokeStyle = rimGrad;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // ── Label text ──
+    const maxLen = 16;
+    const display = label.length > maxLen ? label.slice(0, maxLen) + '…' : label;
+    const fontSize = Math.max(10, Math.min(14, r * 0.22));
+    ctx.font = `${fontSize}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = `hsla(${(hue + hShift + 60) % 360}, 40%, 25%, 0.85)`;
+    ctx.fillText(display, 0, 0);
+
+    ctx.restore();
+  }
+
+
+  // ═══════════════════════════════════════════════════════
+  //  ASANA INTEGRATION STUB
+  //  Replace ASANA_TOKEN and PROJECT_GID when ready.
+  //  Polling every 15s; swap for WebSocket/webhook later.
+  // ═══════════════════════════════════════════════════════
+
+  const ASANA_CONFIG = {
+    token:      'YOUR_ASANA_PAT',       // Personal Access Token
+    projectGid: 'YOUR_PROJECT_GID',     // Project GID from Asana URL
+    pollMs:     15000
+  };
+
+  let knownTaskIds = new Set();
+
+  async function pollAsana() {
+    if (ASANA_CONFIG.token === 'YOUR_ASANA_PAT') return; // not configured yet
+
+    try {
+      const res = await fetch(
+        `https://app.asana.com/api/1.0/projects/${ASANA_CONFIG.projectGid}/tasks?opt_fields=gid,name`,
+        { headers: { Authorization: `Bearer ${ASANA_CONFIG.token}` } }
+      );
+      const data = await res.json();
+      const tasks = data.data || [];
+
+      tasks.forEach(task => {
+        if (!knownTaskIds.has(task.gid)) {
+          knownTaskIds.add(task.gid);
+          spawnBubble(task.name);
+        }
+      });
+
+      document.getElementById('asana-status').textContent = '● Asana: live';
+      document.getElementById('asana-status').style.color = 'rgba(120,255,180,0.5)';
+    } catch (e) {
+      console.warn('Asana poll failed:', e);
+    }
+  }
+
+  // Start polling when configured
+  // pollAsana();
+  // setInterval(pollAsana, ASANA_CONFIG.pollMs);
+
+
+  // ═══════════════════════════════════════════════════════
+  //  MAIN LOOP
+  // ═══════════════════════════════════════════════════════
+
+  let startTime = performance.now();
+
+  function loop() {
+    const now = performance.now();
+    const elapsed = (now - startTime) / 1000;
+
+    // Update background shader time
+    bgMaterial.uniforms.uTime.value = elapsed;
+    renderer.render(bgScene, bgCamera);
+
+    // Apply gentle center pull
+    applyCenterGravity();
+
+    // Clear bubble canvas and redraw all bubbles
+    bCtx.clearRect(0, 0, bCanvas.width, bCanvas.height);
+    bubbles.forEach(b => drawBubble(bCtx, b, now));
+
+    requestAnimationFrame(loop);
+  }
+
+  loop();
+
+
+  // ═══════════════════════════════════════════════════════
+  //  UI INTERACTIONS
+  // ═══════════════════════════════════════════════════════
+
+  const input  = document.getElementById('task-input');
+  const addBtn = document.getElementById('add-btn');
+
+  function addFromInput() {
+    const text = input.value.trim();
+    if (!text) return;
+    spawnBubble(text);
+    input.value = '';
+    input.focus();
+  }
+
+  addBtn.addEventListener('click', addFromInput);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') addFromInput();
+  });
+
+
+  // ═══════════════════════════════════════════════════════
+  //  DRAG INTERACTION
+  //  Click a bubble → grab it → drag → release with velocity
+  // ═══════════════════════════════════════════════════════
+
+  let dragging    = null;   // { bubble, offsetX, offsetY }
+  let lastMouseX  = 0;
+  let lastMouseY  = 0;
+  let velX        = 0;
+  let velY        = 0;
+
+  function getPos(e) {
+    if (e.touches) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    return { x: e.clientX, y: e.clientY };
+  }
+
+  function hitTest(x, y) {
+    // Walk bubbles in reverse so topmost (last drawn) wins
+    for (let i = bubbles.length - 1; i >= 0; i--) {
+      const b = bubbles[i];
+      const dx = x - b.body.position.x;
+      const dy = y - b.body.position.y;
+      if (Math.sqrt(dx * dx + dy * dy) <= b.radius * 1.1) return b;
+    }
+    return null;
+  }
+
+  function onDown(e) {
+    // Don't steal clicks on UI elements
+    if (e.target !== bCanvas) return;
+    const { x, y } = getPos(e);
+    const hit = hitTest(x, y);
+    if (!hit) return;
+
+    e.preventDefault();
+    dragging = hit;
+    lastMouseX = x;
+    lastMouseY = y;
+    velX = 0;
+    velY = 0;
+
+    // Make the body static while held so physics doesn't fight the drag
+    Body.setStatic(hit.body, true);
+    bCanvas.style.cursor = 'grabbing';
+  }
+
+  function onMove(e) {
+    const { x, y } = getPos(e);
+
+    // Update cursor even when not dragging
+    if (!dragging) {
+      bCanvas.style.cursor = hitTest(x, y) ? 'grab' : 'default';
+      return;
+    }
+
+    e.preventDefault();
+
+    // Track velocity for throw
+    velX = x - lastMouseX;
+    velY = y - lastMouseY;
+    lastMouseX = x;
+    lastMouseY = y;
+
+    // Teleport the physics body to follow the cursor
+    Body.setPosition(dragging.body, { x, y });
+  }
+
+  function onUp(e) {
+    if (!dragging) return;
+
+    // Re-enable physics and throw with last velocity
+    Body.setStatic(dragging.body, false);
+    Body.setVelocity(dragging.body, {
+      x: velX * 0.85,
+      y: velY * 0.85
+    });
+
+    dragging = null;
+    bCanvas.style.cursor = 'default';
+  }
+
+  bCanvas.addEventListener('mousedown',  onDown);
+  bCanvas.addEventListener('touchstart', onDown,  { passive: false });
+  window.addEventListener('mousemove',   onMove);
+  window.addEventListener('touchmove',   onMove,  { passive: false });
+  window.addEventListener('mouseup',     onUp);
+  window.addEventListener('touchend',    onUp);
+
+
+  // ═══════════════════════════════════════════════════════
+  //  RESIZE
+  // ═══════════════════════════════════════════════════════
+
+  window.addEventListener('resize', () => {
+    const w = window.innerWidth, h = window.innerHeight;
+
+    renderer.setSize(w, h);
+    bgMaterial.uniforms.uResolution.value.set(w, h);
+
+    bCanvas.width  = w;
+    bCanvas.height = h;
+
+    // Rebuild walls
+    walls.forEach(wall => World.remove(physWorld, wall));
+    walls = createWalls(w, h);
+    World.add(physWorld, walls);
+  });
+
+
+  // ═══════════════════════════════════════════════════════
+  //  SEED A FEW STARTER BUBBLES so it doesn't open empty
+  // ═══════════════════════════════════════════════════════
+
+  const seeds = [
+    'interactive dashboard',
+    'iridescent bubbles',
+    'shader playground',
+    'asana integration',
+    'touch screen someday',
+  ];
+
+  seeds.forEach((s, i) => {
+    setTimeout(() => spawnBubble(s), i * 200);
+  });
+
+
+  // ═══════════════════════════════════════════════════════
+  //  IRIDESCENCE PICKER
+  // ═══════════════════════════════════════════════════════
+
+  document.querySelectorAll('.iri-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.iri-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      bgMaterial.uniforms.uIriBase.value  = parseFloat(btn.dataset.base);
+      bgMaterial.uniforms.uIriRange.value = parseFloat(btn.dataset.range);
+    });
+  });
+
+
+  // ═══════════════════════════════════════════════════════
+  //  SPARKLES — iridescent edge sparkles
+  // ═══════════════════════════════════════════════════════
+
+  const sCanvas = document.getElementById('sparkle-canvas');
+  const sCtx    = sCanvas.getContext('2d');
+  sCanvas.width  = window.innerWidth;
+  sCanvas.height = window.innerHeight;
+
+  const EDGE_BAND  = 80;
+  const SPARKLE_HUES = [0, 30, 60, 100, 150, 180, 210, 260, 300, 330];
+  const sparkles   = [];
+
+  function makeSparkle() {
+    const w = sCanvas.width, h = sCanvas.height;
+
+    const perim = 2 * (w + h);
+    const pos   = Math.random() * perim;
+    let x, y;
+    if (pos < w) {
+      x = pos;
+      y = Math.random() * EDGE_BAND;
+    } else if (pos < w + h) {
+      x = w - Math.random() * EDGE_BAND;
+      y = pos - w;
+    } else if (pos < 2 * w + h) {
+      x = pos - w - h;
+      y = h - Math.random() * EDGE_BAND;
+    } else {
+      x = Math.random() * EDGE_BAND;
+      y = pos - 2 * w - h;
+    }
+
+    const lifespan = 2800 + Math.random() * 2400;  // slow: 2.8–5.2s
+    return {
+      x, y,
+      size:     6 + Math.random() * 13.2,
+      hue:      SPARKLE_HUES[Math.floor(Math.random() * SPARKLE_HUES.length)],
+      rot:      Math.random() * Math.PI * 2,
+      rotSpeed: (Math.random() - 0.5) * 0.008,     // nearly still
+      born:     performance.now(),
+      lifespan,
+      dead:     false
+    };
+  }
+
+  function drawOneStar(ctx, outerR, innerR, hue, alpha) {
+    ctx.beginPath();
+    const pts = 4;
+    for (let i = 0; i < pts; i++) {
+      const outerA = (i / pts) * Math.PI * 2 - Math.PI / 2;
+      const innerA = outerA + Math.PI / pts;
+      const ox = Math.cos(outerA) * outerR;
+      const oy = Math.sin(outerA) * outerR;
+      const ix = Math.cos(innerA) * innerR;
+      const iy = Math.sin(innerA) * innerR;
+      if (i === 0) ctx.moveTo(ox, oy); else ctx.lineTo(ox, oy);
+      ctx.lineTo(ix, iy);
+    }
+    ctx.closePath();
+
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, outerR);
+    // Low saturation — nearly silver-white with a whisper of color
+    g.addColorStop(0,   `hsla(${hue}, 30%, 98%, ${alpha})`);
+    g.addColorStop(0.3, `hsla(${hue}, 20%, 88%, ${alpha * 0.8})`);
+    g.addColorStop(1,   `hsla(${hue}, 15%, 75%, 0)`);
+    ctx.fillStyle = g;
+    ctx.fill();
+  }
+
+  function drawSparkle(sp, now) {
+    const age = now - sp.born;
+    const t   = age / sp.lifespan;
+    if (t >= 1) { sp.dead = true; return; }
+
+    // Slow ease-in / ease-out: cubic smoothstep on both ends
+    // Fade in over first 30%, hold briefly, fade out over last 40%
+    let alpha;
+    if (t < 0.3) {
+      const u = t / 0.3;
+      alpha = u * u * (3 - 2 * u);           // smooth in
+    } else if (t < 0.6) {
+      alpha = 1;
+    } else {
+      const u = (t - 0.6) / 0.4;
+      alpha = 1 - u * u * (3 - 2 * u);       // smooth out
+    }
+    alpha *= 0.72;                             // cap brightness — stays subtle
+    if (alpha <= 0.01) return;
+
+    sp.rot += sp.rotSpeed;
+
+    const { x, y, size, hue, rot } = sp;
+    sCtx.save();
+    sCtx.translate(x, y);
+    sCtx.rotate(rot);
+    sCtx.globalAlpha = alpha;
+
+    drawOneStar(sCtx, size, size * 0.08, hue, alpha);
+
+    // Second star at 45deg — same desaturated treatment
+    sCtx.rotate(Math.PI / 4);
+    drawOneStar(sCtx, size * 0.55, size * 0.06, (hue + 20) % 360, alpha * 0.6);
+
+    // Soft center dot
+    sCtx.beginPath();
+    sCtx.arc(0, 0, size * 0.13, 0, Math.PI * 2);
+    sCtx.fillStyle = `hsla(${hue}, 20%, 98%, ${alpha})`;
+    sCtx.fill();
+
+    sCtx.restore();
+  }
+
+  (function sparkleLoop() {
+    sCtx.clearRect(0, 0, sCanvas.width, sCanvas.height);
+
+    // Spawn ~1 sparkle per frame — gentler density
+    if (Math.random() < 0.7) sparkles.push(makeSparkle());
+
+    const now = performance.now();
+    for (let i = sparkles.length - 1; i >= 0; i--) {
+      drawSparkle(sparkles[i], now);
+      if (sparkles[i].dead) sparkles.splice(i, 1);
+    }
+
+    requestAnimationFrame(sparkleLoop);
+  })();
+
+  window.addEventListener('resize', () => {
+    sCanvas.width  = window.innerWidth;
+    sCanvas.height = window.innerHeight;
+  });
+
+  </script>
+</body>
+</html>
