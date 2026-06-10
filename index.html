@@ -631,6 +631,43 @@
 
 
   // ═══════════════════════════════════════════════════════
+  //  VISUAL VIEWPORT — keyboard-aware repositioning (iPad)
+  //  When the keyboard opens, the visual viewport shrinks.
+  //  We nudge #ui up to sit just above the keyboard.
+  // ═══════════════════════════════════════════════════════
+
+  const ui = document.getElementById('ui');
+
+  function repositionUI() {
+    if (!window.visualViewport) return;
+    const vv = window.visualViewport;
+    // Distance keyboard has eaten from the bottom
+    const keyboardHeight = window.innerHeight - vv.height - vv.offsetTop;
+    const offset = Math.max(0, keyboardHeight);
+    ui.style.bottom = (offset + 24) + 'px';
+    ui.style.transform = `translateX(-50%)`;
+  }
+
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', repositionUI);
+    window.visualViewport.addEventListener('scroll', repositionUI);
+  }
+
+  // Also scroll input into view on focus as a Safari fallback
+  input.addEventListener('focus', () => {
+    setTimeout(() => {
+      input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      repositionUI();
+    }, 300); // wait for keyboard animation to start
+  });
+
+  input.addEventListener('blur', () => {
+    // Reset when keyboard closes
+    ui.style.bottom = '2rem';
+  });
+
+
+  // ═══════════════════════════════════════════════════════
   //  RESIZE
   // ═══════════════════════════════════════════════════════
 
